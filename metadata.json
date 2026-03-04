@@ -1,0 +1,5 @@
+{
+  "name": "TMDB Poster Generator",
+  "description": "Generate beautiful movie and TV show posters using TMDB and OMDB data.",
+  "requestFramePermissions": []
+}
