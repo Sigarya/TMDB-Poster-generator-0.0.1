@@ -28,4 +28,8 @@ export const DEFAULT_SETTINGS = {
   includeTopRated: true,
   includeTV: true,
   includeMovies: true,
+  language: 'en-US',
+  isRTL: false,
+  strictCastLanguage: false,
+  strictLogoLanguage: false,
 };

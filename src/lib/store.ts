@@ -15,6 +15,10 @@ interface Settings {
   includeTopRated: boolean;
   includeTV: boolean;
   includeMovies: boolean;
+  language: string;
+  isRTL: boolean;
+  strictCastLanguage: boolean;
+  strictLogoLanguage: boolean;
 }
 
 interface AppState {

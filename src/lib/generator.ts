@@ -30,19 +30,28 @@ const loadImage = (src: string): Promise<HTMLImageElement> => {
 };
 
 // Helper to wrap text
-const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
+const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, isRTL: boolean, maxLines: number | null = null) => {
   const words = text.split(' ');
   let line = '';
   let currentY = y;
+  let linesCount = 0;
 
   for (let n = 0; n < words.length; n++) {
     const testLine = line + words[n] + ' ';
     const metrics = ctx.measureText(testLine);
     const testWidth = metrics.width;
+    
     if (testWidth > maxWidth && n > 0) {
+      if (maxLines && linesCount >= maxLines - 1) {
+        // Truncate
+        ctx.fillText(line.trim() + '...', x, currentY);
+        return currentY + lineHeight;
+      }
+
       ctx.fillText(line, x, currentY);
       line = words[n] + ' ';
       currentY += lineHeight;
+      linesCount++;
     } else {
       line = testLine;
     }
@@ -55,15 +64,25 @@ export async function generatePoster(
   item: PosterData,
   tmdbApiKey: string,
   omdbApiKey: string,
-  genresMap: Record<number, string>
+  genresMap: Record<number, string>,
+  language: string = 'en-US',
+  isRTL: boolean = false,
+  strictCastLanguage: boolean = false
 ): Promise<string> {
   // 1. Fetch additional data
-  const details = await fetchDetails(tmdbApiKey, item.id, item.media_type);
-  const credits = await fetchCredits(tmdbApiKey, item.id, item.media_type);
-  const images = await fetchImages(tmdbApiKey, item.id, item.media_type);
+  const details = await fetchDetails(tmdbApiKey, item.id, item.media_type, language);
+  const credits = await fetchCredits(tmdbApiKey, item.id, item.media_type, language);
+  const images = await fetchImages(tmdbApiKey, item.id, item.media_type, language);
   
   // 2. Get Logo
-  const logo = images.logos.find((l: any) => l.iso_639_1 === 'en' && l.file_path.endsWith('.png'));
+  const langCode = language.split('-')[0];
+  let logo = images.logos.find((l: any) => l.iso_639_1 === langCode && l.file_path.endsWith('.png'));
+  if (!logo && langCode !== 'en') {
+    logo = images.logos.find((l: any) => l.iso_639_1 === 'en' && l.file_path.endsWith('.png'));
+  }
+  if (!logo) {
+    logo = images.logos[0];
+  }
   const logoPath = logo ? `https://image.tmdb.org/t/p/original${logo.file_path}` : null;
 
   // 3. Get Ratings
@@ -112,9 +131,6 @@ export async function generatePoster(
     logoPath ? loadImage(logoPath) : Promise.resolve(null),
     loadImage(ASSETS.CAST_ICON),
     loadImage(ASSETS.DIRECTOR_ICON),
-    // We don't have a generic RT icon in the list, just fresh/rotten/certified.
-    // The python script logic uses fresh/rotten/certified based on score.
-    // We'll load them all and use conditionally.
     Promise.resolve(null), 
     loadImage(ASSETS.FRESH_TOMATO),
     loadImage(ASSETS.ROTTEN_TOMATO),
@@ -127,112 +143,157 @@ export async function generatePoster(
   ctx.drawImage(backdropImg, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   
   // Overlay
-  ctx.drawImage(overlayImg, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  ctx.save();
+  if (isRTL) {
+    ctx.scale(-1, 1);
+    ctx.drawImage(overlayImg, -CANVAS_WIDTH, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  } else {
+    ctx.drawImage(overlayImg, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  }
+  ctx.restore();
+
+  // Common Layout Config
+  const marginX = 50;
+  const contentX = isRTL ? CANVAS_WIDTH - marginX : marginX;
+  ctx.textAlign = isRTL ? 'right' : 'left';
+  if (isRTL) {
+    canvas.dir = 'rtl';
+  }
+
+  // Start positioning from Top
+  let currentY = 50;
 
   // Logo
   if (logoImg) {
-    // Resize logic: maintain aspect ratio, max width 800, max height 300
-    // Position: Bottom Left area, usually.
-    // The python script puts it at (50, 50) or similar? No, usually bottom left for these wallpapers.
-    // Let's look at the sample output or python script.
-    // Python script `_add_content`:
-    // logo_size = (800, 300)
-    // logo_position = (50, 50) -> Top Left?
-    // Wait, `overlay.png` usually darkens the bottom or left.
-    // Let's assume standard layout: Bottom Left or Top Left.
-    // Most TV interfaces have info at the bottom.
-    // Let's put it at Bottom Left, above the text.
-    
-    // Actually, let's check the python script logic if I can recall or infer.
-    // "Rich Poster Design: Combines backdrop images with logos, cast, crew, ratings, and plot summaries"
-    // Usually Title/Logo is Top Left or Bottom Left.
-    // Let's go with Bottom Left, starting around y=600?
-    
     const maxLogoW = 600;
     const maxLogoH = 250;
     const ratio = Math.min(maxLogoW / logoImg.width, maxLogoH / logoImg.height);
     const logoW = logoImg.width * ratio;
     const logoH = logoImg.height * ratio;
     
-    // Position: x=50, y=CANVAS_HEIGHT - 450 (approx)
-    ctx.drawImage(logoImg, 50, CANVAS_HEIGHT - 480 - logoH, logoW, logoH);
+    // Position
+    const logoDrawX = isRTL ? contentX - logoW : contentX;
+    
+    ctx.drawImage(logoImg, logoDrawX, currentY, logoW, logoH);
+    currentY += logoH + 30; // Add padding below logo
   } else {
     // Fallback Text Title
     ctx.font = 'bold 80px Arial';
     ctx.fillStyle = 'white';
     ctx.shadowColor = 'black';
     ctx.shadowBlur = 10;
-    ctx.fillText(item.title, 50, CANVAS_HEIGHT - 500);
+    // Need to account for text height roughly
+    currentY += 80; 
+    ctx.fillText(item.title, contentX, currentY);
+    currentY += 30;
   }
 
-  // Metadata (Year | Runtime | Genre | Certification)
+  // Metadata (Year | Runtime | Genre)
   ctx.font = '30px Arial';
   ctx.fillStyle = '#cccccc';
   const year = (item.release_date || '').split('-')[0];
   const runtime = details.runtime ? `${details.runtime} min` : '';
   const genreNames = item.genre_ids.slice(0, 3).map(id => genresMap[id]).join(', ');
-  // Certification is tricky to get from standard details without `release_dates` append.
-  // Let's skip certification for now or fetch it if easy.
   const metaText = [year, runtime, genreNames].filter(Boolean).join('  •  ');
-  ctx.fillText(metaText, 50, CANVAS_HEIGHT - 420);
+  
+  // Adjust Y for text baseline (approx)
+  currentY += 30;
+  ctx.fillText(metaText, contentX, currentY);
+  
+  const metaWidth = ctx.measureText(metaText).width;
 
-  // Ratings
-  let ratingX = 50;
-  const ratingY = CANVAS_HEIGHT - 360;
+  // Ratings (Same row as Metadata)
+  // Calculate starting X for ratings
+  let ratingX = isRTL ? contentX - metaWidth - 50 : contentX + metaWidth + 50;
+  const ratingY = currentY; 
   const iconSize = 40;
   
+  // Helper to draw rating group
+  const drawRating = (icon: HTMLImageElement | null, text: string, color: string = 'white') => {
+    ctx.font = 'bold 30px Arial';
+    ctx.fillStyle = color;
+    const textWidth = ctx.measureText(text).width;
+    
+    if (isRTL) {
+      if (icon) {
+        ctx.drawImage(icon, ratingX - iconSize, ratingY - 30, iconSize, iconSize);
+        ctx.fillText(text, ratingX - iconSize - 10, ratingY);
+        return iconSize + 10 + textWidth + 40;
+      } else {
+        ctx.fillText(text, ratingX, ratingY);
+        return textWidth + 40;
+      }
+    } else {
+      if (icon) {
+        ctx.drawImage(icon, ratingX, ratingY - 30, iconSize, iconSize);
+        ctx.fillText(text, ratingX + 50, ratingY);
+        return 140; 
+      } else {
+        ctx.fillText(text, ratingX, ratingY);
+        return textWidth + 40;
+      }
+    }
+  };
+
   // RT
   if (ratings.rt !== null) {
     let icon = ratings.certified ? certifiedIcon : (ratings.rt >= 60 ? freshIcon : rottenIcon);
     if (icon) {
-      ctx.drawImage(icon, ratingX, ratingY - 30, iconSize, iconSize);
-      ctx.font = 'bold 30px Arial';
-      ctx.fillStyle = 'white';
-      ctx.fillText(`${ratings.rt}%`, ratingX + 50, ratingY);
-      ratingX += 140;
+      const widthUsed = drawRating(icon, `${ratings.rt}%`);
+      ratingX += isRTL ? -widthUsed : widthUsed;
     }
   }
 
   // Metacritic
   if (ratings.meta !== null) {
-    ctx.drawImage(metaIcon, ratingX, ratingY - 30, iconSize, iconSize);
-    ctx.font = 'bold 30px Arial';
-    ctx.fillStyle = 'white';
-    ctx.fillText(`${ratings.meta}`, ratingX + 50, ratingY);
-    ratingX += 120;
+    const widthUsed = drawRating(metaIcon, `${ratings.meta}`);
+    ratingX += isRTL ? -widthUsed : widthUsed;
   }
 
   // TMDB
-  // Always show TMDB score
-  // We don't have a specific TMDB icon in the assets list, but we can use text or the logo?
-  // The assets list has `tmdblogo.png`.
-  // Let's use a simple star or just "TMDB".
-  ctx.font = 'bold 30px Arial';
-  ctx.fillStyle = '#01b4e4'; // TMDB Blue
-  ctx.fillText(`TMDB ${Math.round(item.vote_average * 10)}%`, ratingX, ratingY);
+  const tmdbWidth = drawRating(null, `TMDB ${Math.round(item.vote_average * 10)}%`, '#01b4e4');
+  ratingX += isRTL ? -tmdbWidth : tmdbWidth;
 
+  currentY += 50; // Reduced spacing to Plot
 
   // Plot
   ctx.font = '24px Arial';
   ctx.fillStyle = 'white';
-  wrapText(ctx, item.overview, 50, CANVAS_HEIGHT - 300, 1000, 36);
+  // Max 3 lines
+  currentY = wrapText(ctx, item.overview, contentX, currentY, 1000, 36, isRTL, 3);
+  currentY += 10; // Reduced padding
 
   // Cast
-  const cast = credits.cast?.slice(0, 4).map((c: any) => c.name).join(', ');
+  let castList = credits.cast || [];
+  if (strictCastLanguage) {
+    castList = castList.filter((c: any) => c.name !== c.original_name || item.original_language === langCode);
+  }
+  const cast = castList.slice(0, 4).map((c: any) => c.name).join(', ');
   if (cast) {
-    ctx.drawImage(castIcon, 50, CANVAS_HEIGHT - 120, 30, 30);
+    const iconX = isRTL ? contentX - 30 : contentX;
+    ctx.drawImage(castIcon, iconX, currentY - 25, 30, 30); // Adjust icon Y to align with text
+    
     ctx.font = '24px Arial';
     ctx.fillStyle = '#cccccc';
-    ctx.fillText(`Starring: ${cast}`, 90, CANVAS_HEIGHT - 95);
+    const textX = isRTL ? contentX - 40 : contentX + 40;
+    ctx.fillText(`${cast}`, textX, currentY);
+    currentY += 40;
   }
 
   // Director
-  const director = credits.crew?.find((c: any) => c.job === 'Director')?.name;
+  let crewList = credits.crew || [];
+  if (strictCastLanguage) {
+    crewList = crewList.filter((c: any) => c.name !== c.original_name || item.original_language === langCode);
+  }
+  const director = crewList.find((c: any) => c.job === 'Director')?.name;
   if (director) {
-    ctx.drawImage(directorIcon, 50, CANVAS_HEIGHT - 70, 30, 30);
+    const iconX = isRTL ? contentX - 30 : contentX;
+    ctx.drawImage(directorIcon, iconX, currentY - 25, 30, 30);
+    
     ctx.font = '24px Arial';
     ctx.fillStyle = '#cccccc';
-    ctx.fillText(`Directed by: ${director}`, 90, CANVAS_HEIGHT - 45);
+    const textX = isRTL ? contentX - 40 : contentX + 40;
+    ctx.fillText(`${director}`, textX, currentY);
   }
 
   return canvas.toDataURL('image/jpeg', 0.9);

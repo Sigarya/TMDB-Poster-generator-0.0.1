@@ -1,6 +1,7 @@
 {
   "name": "react-example",
   "private": true,
+  "homepage": ".",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
@@ -29,6 +30,7 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "file-saver": "^2.0.5",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "radix-ui": "^1.4.3",
